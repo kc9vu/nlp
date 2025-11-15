@@ -15,7 +15,7 @@ impl<'a> Chunk<'a> {
     }
 }
 
-fn natural_chunk(a: &str) -> Chunk {
+fn natural_chunk(a: &str) -> Chunk<'_> {
     let is_digit = match a.as_bytes().first() {
         None => return Chunk::new(a, false),
         Some(c) => c.is_ascii_digit(),
