@@ -1,7 +1,19 @@
 [package]
 name = "nlp"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Natural Language Progress"
 
 [dependencies]
+num-bigint = { version = "0.4", optional = true }
+winnow = "1"
+
+[features]
+bigint = ["dep:num-bigint"]
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "sort"
+harness = false

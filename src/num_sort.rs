@@ -1,115 +1,150 @@
-/// Natural sorting for Rust strings,
-/// from https://github.com/jwiesler/natural-sort-rs/
+mod elder;
+pub use elder::natural_cmp as natural_quick_cmp;
 
-use std::cmp::Ordering;
+// use std::borrow::Cow;
+use std::cmp::Ordering::{self, *};
 
-#[derive(PartialEq, Eq, Debug)]
-struct Chunk<'a> {
-    chars: &'a str,
-    are_digits: bool,
-}
+#[cfg(feature = "bigint")]
+use num_bigint::BigUint;
+use winnow::ascii::digit1;
+use winnow::combinator::{alt, repeat};
+use winnow::prelude::*;
+use winnow::stream::AsChar;
+use winnow::token::{rest, take_while};
 
-impl<'a> Chunk<'a> {
-    pub fn new(chars: &'a str, are_digits: bool) -> Self {
-        Chunk { chars, are_digits }
-    }
-}
+pub fn natural_cmp<S>(left: S, right: S) -> Ordering
+where
+    S: AsRef<str>,
+{
+    let mut left = left.as_ref();
+    let mut right = right.as_ref();
 
-fn natural_chunk(a: &str) -> Chunk<'_> {
-    let is_digit = match a.as_bytes().first() {
-        None => return Chunk::new(a, false),
-        Some(c) => c.is_ascii_digit(),
-    };
-    for (i, c) in a.bytes().enumerate() {
-        if c.is_ascii_digit() != is_digit {
-            return Chunk::new(&a[..i], is_digit);
+    while !left.is_empty() && !right.is_empty() {
+        let ta = parse_token(&mut left).unwrap();
+        let tb = parse_token(&mut right).unwrap();
+        match ta.cmp(&tb) {
+            Equal => continue,
+            ord => return ord,
         }
     }
-    Chunk::new(a, is_digit)
+    left.len().cmp(&right.len())
 }
 
-pub fn natural_cmp(mut a: &str, mut b: &str) -> Ordering {
-    while !a.is_empty() && !b.is_empty() {
-        let chunk_a = natural_chunk(a);
-        let chunk_b = natural_chunk(b);
+pub fn natural_sort_key<'s>(s: &'s str) -> CmpState<'s> {
+    CmpState::parse(s)
+}
 
-        if chunk_a.are_digits && chunk_b.are_digits {
-            /* match chunk_a.chars.len().cmp(&chunk_b.chars.len()) */
-            match chunk_a
-                .chars
-                .parse::<u32>()
-                .unwrap()
-                .cmp(&chunk_b.chars.parse::<u32>().unwrap())
-            {
-                Ordering::Equal => (),
-                v => return v,
+pub fn natural_cmp_filename<S>(left: S, right: S) -> Ordering
+where
+    S: AsRef<str>,
+{
+    let left = left.as_ref();
+    let right = right.as_ref();
+
+    if let Ok((left_name, left_stem)) = parse_filename.parse(left)
+        && let Ok((right_name, right_stem)) = parse_filename.parse(right)
+        && left_stem == right_stem
+    {
+        CmpToken::Str(left_name).cmp(&CmpToken::Str(right_name))
+    } else {
+        natural_cmp(left, right)
+    }
+}
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub struct CmpState<'s> {
+    tokens: Vec<CmpToken<'s>>,
+}
+
+impl<'s> CmpState<'s> {
+    fn parse(s: &'s str) -> Self {
+        // let mut input = s.str();
+        // alt((parse_hex,)).parse(s).unwrap()
+        let tokens: Vec<CmpToken<'s>> = repeat(1.., parse_token)
+            .parse(s)
+            .unwrap_or_else(|_| vec![CmpToken::Str(s)]);
+        Self { tokens }
+    }
+}
+
+#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(PartialEq, Eq)]
+enum CmpToken<'s> {
+    Str(&'s str),
+    Int(u64),
+    #[cfg(not(feature = "bigint"))]
+    Numeric(&'s str),
+    #[cfg(feature = "bigint")]
+    BigInt(BigUint),
+}
+
+#[cfg(feature = "bigint")]
+fn parse_digit<'s>(input: &mut &'s str) -> ModalResult<CmpToken<'s>> {
+    digit1
+        .try_map(|s: &str| {
+            if let Ok(i) = s.parse::<u64>() {
+                Ok(CmpToken::Int(i))
+            } else {
+                s.parse::<BigUint>().map(CmpToken::BigInt)
             }
-        }
-
-        match chunk_a.chars.cmp(chunk_b.chars) {
-            Ordering::Equal => (),
-            v => return v,
-        }
-
-        a = &a[chunk_a.chars.len()..];
-        b = &b[chunk_b.chars.len()..];
-    }
-
-    a.len().cmp(&b.len())
+        })
+        .parse_next(input)
 }
 
-pub fn natural_sort<S: AsRef<str>>(items: &[S]) -> Vec<&str> {
-    let mut items = items.into_iter().map(AsRef::as_ref).collect::<Vec<_>>();
-    items.sort_by(|a, b| natural_cmp(a, b));
-    items
+#[cfg(not(feature = "bigint"))]
+fn parse_digit<'s>(input: &mut &'s str) -> ModalResult<CmpToken<'s>> {
+    digit1.parse_next(input).map(|s| {
+        if let Ok(i) = s.parse::<u64>() {
+            CmpToken::Int(i)
+        } else {
+            CmpToken::Numeric(s)
+        }
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn parse_non_digits<'s>(input: &mut &'s str) -> ModalResult<CmpToken<'s>> {
+    take_while(1.., |c| !AsChar::is_dec_digit(c))
+        .parse_next(input)
+        .map(CmpToken::Str)
+}
 
-    #[test]
-    fn natural_cmp_works() {
-        assert_eq!(Ordering::Equal, natural_cmp("", ""));
-        assert_eq!(Ordering::Equal, natural_cmp("1", "1"));
-        assert_eq!(Ordering::Equal, natural_cmp("a", "a"));
+fn parse_token<'s>(input: &mut &'s str) -> ModalResult<CmpToken<'s>> {
+    alt((parse_digit, parse_non_digits)).parse_next(input)
+}
 
-        assert_eq!(Ordering::Less, natural_cmp("ab", "ac"));
-        assert_eq!(Ordering::Greater, natural_cmp("ac", "ab"));
+fn parse_filename<'s>(input: &mut &'s str) -> ModalResult<(&'s str, &'s str)> {
+    (take_while(1.., |c| c != '.'), rest).parse_next(input)
+}
 
-        assert_eq!(Ordering::Less, natural_cmp("test1", "test12"));
-        assert_eq!(Ordering::Greater, natural_cmp("test12", "test1"));
-
-        assert_eq!(Ordering::Less, natural_cmp("1", "2"));
-        assert_eq!(Ordering::Greater, natural_cmp("2", "1"));
-
-        assert_eq!(Ordering::Less, natural_cmp("12", "13"));
-        assert_eq!(Ordering::Greater, natural_cmp("13", "12"));
-
-        assert_eq!(Ordering::Less, natural_cmp("1a", "12"));
-        assert_eq!(Ordering::Greater, natural_cmp("12", "1a"));
-
-        assert_eq!(Ordering::Greater, natural_cmp("aa", "a2"));
-        assert_eq!(Ordering::Less, natural_cmp("a2", "aa"));
-
-        assert_eq!(Ordering::Greater, natural_cmp("a", "1"));
-        assert_eq!(Ordering::Less, natural_cmp("1", "a"));
-
-        assert_eq!(Ordering::Less, natural_cmp("2", "12"));
-        assert_eq!(Ordering::Greater, natural_cmp("12", "2"));
-
-        assert_eq!(Ordering::Less, natural_cmp("12a", "22b"));
-        assert_eq!(Ordering::Greater, natural_cmp("22b", "12a"));
-
-        assert_eq!(Ordering::Less, natural_cmp("12a", "221"));
-        assert_eq!(Ordering::Greater, natural_cmp("221", "12a"));
-
-        assert_eq!(Ordering::Less, natural_cmp("06", "8"));
-        assert_eq!(Ordering::Greater, natural_cmp("8", "06"));
+impl<'s> PartialOrd for CmpToken<'s> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
+}
 
-    #[test]
-    fn natural_sort_works() {
-        assert_eq!(vec!["3", "8z", "12", "12n", "34n", "one", "two"], natural_sort(&["one", "two", "3", "12", "34n", "12n", "8z"]));
+impl<'s> Ord for CmpToken<'s> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use CmpToken::*;
+
+        match (self, other) {
+            (Str(left), Str(right)) => left.cmp(right),
+            (Str(_), _) => Greater,
+            (_, Str(_)) => Less,
+            #[cfg(not(feature = "bigint"))]
+            (Numeric(left), Numeric(right)) if left.len() == right.len() => left.cmp(right),
+            (Numeric(left), Numeric(right)) => left.len().cmp(&right.len()),
+            #[cfg(not(feature = "bigint"))]
+            (Numeric(_), _) => Greater,
+            #[cfg(not(feature = "bigint"))]
+            (_, Numeric(_)) => Less,
+            (Int(left), Int(right)) => left.cmp(right),
+            #[cfg(feature = "bigint")]
+            (Int(_), BigInt(_)) => Less,
+            #[cfg(feature = "bigint")]
+            (BigInt(left), BigInt(right)) => left.cmp(right),
+            #[cfg(feature = "bigint")]
+            (BigInt(_), Int(_)) => Greater,
+        }
     }
 }
