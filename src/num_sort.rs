@@ -1,13 +1,13 @@
-mod elder;
-pub use elder::natural_cmp as natural_quick_cmp;
+mod manul;
+pub use manul::natural_cmp as natural_quick_cmp;
+pub use manul::natural_sort as natural_quick_sort;
 
-// use std::borrow::Cow;
 use std::cmp::Ordering::{self, *};
 
 #[cfg(feature = "bigint")]
 use num_bigint::BigUint;
 use winnow::ascii::digit1;
-use winnow::combinator::{alt, repeat};
+use winnow::combinator::alt;
 use winnow::prelude::*;
 use winnow::stream::AsChar;
 use winnow::token::{rest, take_while};
@@ -30,10 +30,6 @@ where
     left.len().cmp(&right.len())
 }
 
-pub fn natural_sort_key<'s>(s: &'s str) -> CmpState<'s> {
-    CmpState::parse(s)
-}
-
 pub fn natural_cmp_filename<S>(left: S, right: S) -> Ordering
 where
     S: AsRef<str>,
@@ -48,23 +44,6 @@ where
         CmpToken::Str(left_name).cmp(&CmpToken::Str(right_name))
     } else {
         natural_cmp(left, right)
-    }
-}
-
-#[cfg_attr(debug_assertions, derive(Debug))]
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub struct CmpState<'s> {
-    tokens: Vec<CmpToken<'s>>,
-}
-
-impl<'s> CmpState<'s> {
-    fn parse(s: &'s str) -> Self {
-        // let mut input = s.str();
-        // alt((parse_hex,)).parse(s).unwrap()
-        let tokens: Vec<CmpToken<'s>> = repeat(1.., parse_token)
-            .parse(s)
-            .unwrap_or_else(|_| vec![CmpToken::Str(s)]);
-        Self { tokens }
     }
 }
 
@@ -133,6 +112,7 @@ impl<'s> Ord for CmpToken<'s> {
             (_, Str(_)) => Less,
             #[cfg(not(feature = "bigint"))]
             (Numeric(left), Numeric(right)) if left.len() == right.len() => left.cmp(right),
+            #[cfg(not(feature = "bigint"))]
             (Numeric(left), Numeric(right)) => left.len().cmp(&right.len()),
             #[cfg(not(feature = "bigint"))]
             (Numeric(_), _) => Greater,

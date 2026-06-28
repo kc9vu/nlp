@@ -2,12 +2,16 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-fn manual(mut v: Vec<String>) {
+fn manual_cmp(mut v: Vec<String>) {
     v.sort_by(|a, b| nlp::natural_quick_cmp(a, b));
 }
 
-fn winnow(mut v: Vec<String>) {
+fn winnow_cmp(mut v: Vec<String>) {
     v.sort_by(|a, b| nlp::natural_cmp_filename(a, b));
+}
+
+fn manual_sort(mut v: Vec<String>) {
+    v.sort_by_cached_key(|s| nlp::natural_quick_sort(s));
 }
 
 fn bench_sort(c: &mut Criterion) {
@@ -30,9 +34,15 @@ fn bench_sort(c: &mut Criterion) {
         "e1dd69711908c98771cbfb9cab98e940285054730.jpg".to_string(),
     ];
     // 对每个函数定义一个基准测试
-    c.bench_function("manual", |b| b.iter(|| manual(black_box(v.clone()))));
-
-    c.bench_function("winnow", |b| b.iter(|| winnow(black_box(v.clone()))));
+    c.bench_function("manual_cmp", |b| {
+        b.iter(|| manual_cmp(black_box(v.clone())))
+    });
+    c.bench_function("manual_sort", |b| {
+        b.iter(|| manual_sort(black_box(v.clone())))
+    });
+    c.bench_function("winnow_cmp", |b| {
+        b.iter(|| winnow_cmp(black_box(v.clone())))
+    });
 }
 
 // 生成基准测试组
